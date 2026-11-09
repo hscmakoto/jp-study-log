@@ -37,13 +37,23 @@ TIMEZONE_NOTE = "时区：Asia/Hong_Kong（UTC+8）"
 WEEK_START_MONDAY = True
 FIRST_WEEKDAY = 0 if WEEK_START_MONDAY else 6
 
-# 热力图的方块，颜色深浅 = 当天学习时长
+# 严格模式：没记录的日子 = 缺勤（与「明确记了没学」同色）
+STRICT_MISSED = True
+
+# 热力图的方块，颜色深浅 = 当天学习时长（GitHub app 的浅色/深色主题都可辨识）
 EMOJI_HEAVY = "🟩"   # ≥ 2 小时
 EMOJI_MEDIUM = "🟦"  # ≥ 1 小时
 EMOJI_LIGHT = "🟨"   # ≥ 30 分钟
 EMOJI_SHORT = "🟧"   # 学了但不足 30 分钟 / 未计时
-EMOJI_MISSED = "⬛"  # 有记录但没学
-EMOJI_NO_RECORD = "⬜"  # 没记录
+EMOJI_MISSED = "⬛"  # 没学 / 没记录
+EMOJI_BLANK = "⬜"   # 本月之外的占位（或严格模式关闭时的「无记录」）
+
+# 日历只画到今天为止；之后的日子用占位，不算缺勤
+FUTURE_PLACEHOLDER = "⬜"
+
+
+def is_past_day(day: dt.date) -> bool:
+    return day <= dt.date.today()
 
 
 def level_emoji(entry: dict) -> str:
@@ -59,9 +69,29 @@ def level_emoji(entry: dict) -> str:
     return EMOJI_LIGHT
 
 
+def day_emoji(day: dt.date, by_date: dict[str, dict]) -> str:
+    """某个日期的方块。"""
+    entry = by_date.get(day.isoformat())
+    if entry is not None:
+        return level_emoji(entry)
+    # 没有记录
+    if not is_past_day(day):
+        return FUTURE_PLACEHOLDER
+    return EMOJI_MISSED if STRICT_MISSED else EMOJI_BLANK
+
+
 def month_block(year: int, month: int, by_date: dict[str, dict]) -> list[str]:
     """一个月渲染成一个代码块：星历行 + 每周两行（emoji 行 + 日期行）。
 
+    > 注意：GitHub 的 markdown 渲染器会在任何字符间插入 <wbr>，
+    > 所以像素级热力图在 README 里很难保证对齐。这里做成
+    > "日期网格 + 颜色方块"，对不齐也不会错位，浏览器里永远可读。
+    """
+def month_block(year: int, month: int, by_date: dict[str, dict],
+                start_day: dt.date | None = None) -> list[str]:
+    """一个月渲染成一个代码块：星历行 + 每周两行（emoji 行 + 日期行）。
+
+    start_day 之前的日子不算缺勤，用占位方块。
     > 注意：GitHub 的 markdown 渲染器会在任何字符间插入 <wbr>，
     > 所以像素级热力图在 README 里很难保证对齐。这里做成
     > "日期网格 + 颜色方块"，对不齐也不会错位，浏览器里永远可读。
@@ -78,12 +108,13 @@ def month_block(year: int, month: int, by_date: dict[str, dict]) -> list[str]:
         emoji_cells, date_cells = [], []
         for day in week:
             if day.month != month:
-                emoji_cells.append("  " + EMOJI_NO_RECORD)
+                emoji_cells.append("  " + EMOJI_BLANK)
                 date_cells.append("  " + f"{'':>2}")
                 continue
-            key = day.isoformat()
-            entry = by_date.get(key)
-            emoji_cells.append("  " + (EMOJI_NO_RECORD if entry is None else level_emoji(entry)))
+            if start_day is not None and day < start_day:
+                emoji_cells.append("  " + EMOJI_BLANK)
+            else:
+                emoji_cells.append("  " + day_emoji(day, by_date))
             date_cells.append("  " + f"{day.day:>2}")
         emoji_rows.append("".join(emoji_cells))
         date_rows.append("".join(date_cells))
@@ -97,13 +128,26 @@ def month_block(year: int, month: int, by_date: dict[str, dict]) -> list[str]:
 
 
 def heatmap_section(entries: list[dict], months: int) -> str:
-    if not entries:
-        return "_还没有记录。_\n"
+    """从「第一条记录所在月」画到「今天所在月」，最多 months 个月。
+
+    记录开始之前的月份不画：那些日子当时还没开始打卡，
+    显示成缺勤既不公平也没意义。
+    """
     by_date = {e["date"]: e for e in entries}
-    last = max(dt.date.fromisoformat(e["date"]) for e in entries)
+    now = dt.date.today()
+    if entries:
+        first = min(dt.date.fromisoformat(e["date"]) for e in entries)
+        start = (first.year, first.month)
+    else:
+        first = None
+        start = (now.year, now.month)
+
+    # 从今天所在月往前推，但不超过 start
     slots = []
-    y, m = last.year, last.month
+    y, m = now.year, now.month
     for _ in range(months):
+        if (y, m) < start:
+            break
         slots.append((y, m))
         m -= 1
         if m == 0:
@@ -114,17 +158,24 @@ def heatmap_section(entries: list[dict], months: int) -> str:
     out = ["```text"]
     for (y, m) in slots:
         out.append("")
-        out.extend(month_block(y, m, by_date))
+        out.extend(month_block(y, m, by_date, start_day=first))
     out.append("```")
     return "\n".join(out) + "\n"
 
 
 def legend() -> str:
-    return (
-        f"图例：{EMOJI_HEAVY} ≥2 小时　{EMOJI_MEDIUM} ≥1 小时　"
-        f"{EMOJI_LIGHT} ≥30 分钟　{EMOJI_SHORT} 学了（未计时/不足 30 分钟）　"
-        f"{EMOJI_MISSED} 没学　{EMOJI_NO_RECORD} 没记录\n"
-    )
+    rects = [EMOJI_HEAVY, EMOJI_MEDIUM, EMOJI_LIGHT, EMOJI_SHORT, EMOJI_MISSED, EMOJI_BLANK]
+    missed_text = "缺勤（没学，或当天没记录）" if STRICT_MISSED else "明确记录为没学"
+    blank_text = "未到的日期 / 开始记录之前" if STRICT_MISSED else "没有记录"
+    lines = [
+        f"- {rects[0]} 学了 ≥2 小时",
+        f"- {rects[1]} 学了 ≥1 小时",
+        f"- {rects[2]} 学了 ≥30 分钟",
+        f"- {rects[3]} 学了（未计时 / 不足 30 分钟）",
+        f"- {rects[4]} {missed_text}",
+        f"- {rects[5]} {blank_text}",
+    ]
+    return "\n".join(lines) + "\n"
 
 
 def recent_table(entries: list[dict], n: int = 10) -> str:

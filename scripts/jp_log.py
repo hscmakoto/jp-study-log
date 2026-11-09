@@ -144,32 +144,33 @@ def write_log(d: dt.date, studied: bool, minutes: int | None,
 
 
 def summarize(entries: list[dict]) -> dict:
-    studied_days = [e for e in entries if e["studied"]]
-    total_minutes = sum(e["minutes"] or 0 for e in studied_days)
     today_d = today()
-    # 找到今天（或今天之前最近一个记录日）作为"当前"
-    if entries:
-        last = dt.date.fromisoformat(entries[-1]["date"])
-        ref = min(today_d, last)
-    else:
-        ref = today_d
-
-    # 截止到 ref（按记录范围）的连续学习天数
+    # 严格模式：没记录的日子视为缺勤，中断连续天数
     studied_dates = {e["date"] for e in entries if e["studied"]}
+    total_minutes = sum(e["minutes"] or 0 for e in entries if e["studied"])
+
+    last_studied = None
+    if studied_dates:
+        last_studied = dt.date.fromisoformat(max(studied_dates))
     streak = 0
-    cur = ref
-    while cur.isoformat() in studied_dates:
-        streak += 1
-        cur -= dt.timedelta(days=1)
+    if last_studied and (today_d - last_studied).days <= 1:
+        cur = today_d if today_d.isoformat() in studied_dates else today_d - dt.timedelta(days=1)
+        while cur.isoformat() in studied_dates:
+            streak += 1
+            cur -= dt.timedelta(days=1)
 
     def active_days_in(start: dt.date, end: dt.date) -> int:
-        return sum(1 for e in entries
-                   if start <= dt.date.fromisoformat(e["date"]) <= end and e["studied"])
+        if not entries:
+            return 0
+        first = dt.date.fromisoformat(entries[0]["date"])
+        return sum(1 for day in (start + dt.timedelta(days=i)
+                                 for i in range((end - start).days + 1))
+                   if first <= day <= end and day.isoformat() in studied_dates)
 
     week_start = today_d - dt.timedelta(days=today_d.weekday())
     return {
         "recorded_days": len(entries),
-        "studied_days": len(studied_days),
+        "studied_days": len(studied_dates),
         "total_minutes": total_minutes,
         "total_hours": round(total_minutes / 60, 1),
         "streak": streak,
