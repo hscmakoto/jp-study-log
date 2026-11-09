@@ -1,0 +1,38 @@
+name: build-readme
+
+# 每次推送 data/logs 下的记录后，自动重新生成 README
+on:
+  push:
+    branches: [main]
+    paths:
+      - "data/logs/**"
+      - "scripts/build_readme.py"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Generate README
+        run: python scripts/build_readme.py --months 6
+
+      - name: Commit if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet README.md; then
+            echo "README 无变化"
+          else
+            git add README.md
+            git commit -m "chore: auto-build README"
+            git push
+          fi
