@@ -9,11 +9,18 @@
 双击 publish.cmd   → 重建 README 并推送到 GitHub
 ```
 
+**一天可以记多次**：白天记一次、晚上又学一课再记一次，会自动合并到同一天——
+时长相加，备注用 ` / ` 拼接。例：上午 240 分钟「标日47」+ 晚上 60 分钟「标日48」
+→ `300 分钟`，备注 `标日初级下47 / 标日48课`。热力图颜色会随之变深。
+
+想覆盖而不是合并，加 `--replace`。
+
 ## 常用命令
 
 ```bat
 python scripts\jp_log.py -y                              :: 今天学了，不记时长
-python scripts\jp_log.py --minutes 40 --note "标日48课"   :: 学了 40 分钟
+python scripts\jp_log.py --minutes 40 --note "标日48课"   :: 学了 40 分钟（同日累加）
+python scripts\jp_log.py --minutes 90 --note "重记" --replace  :: 覆盖当天
 python scripts\jp_log.py -n                              :: 今天没学
 python scripts\jp_log.py -d 2026-11-08 -n                :: 补记某天没学
 python scripts\jp_log.py --undo                          :: 撤销最近一条

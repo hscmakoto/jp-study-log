@@ -115,32 +115,102 @@ def load_entries() -> list[dict]:
     return entries
 
 
+def _quote(s: str) -> str:
+    """需要加引号的值加双引号，避免冒号/井号搞乱解析。"""
+    if not s:
+        return ""
+    if re.search(r"[:#\"']|^\s|\s$", s):
+        return '"' + s.replace('"', '\\"') + '"'
+    return s
+
+
+def _append_text(old: str, new: str, sep: str = " / ") -> str:
+    """把新内容接到旧内容后面；已经包含的片段不重复追加。"""
+    new = (new or "").strip()
+    if not new:
+        return old or ""
+    old = (old or "").strip()
+    if not old:
+        return new
+    parts = [p.strip() for p in old.split(sep) if p.strip()]
+    if new in parts:
+        return old
+    if new.startswith(old + " "):
+        # 例如旧 note="标日初级下47"，新 note="标日初级下47 第2次" —— 保留更长的
+        return new
+    if old.startswith(new + " "):
+        return old
+    return f"{old}{sep}{new}"
+
+
+def merge_entries(old: dict, new: dict) -> dict:
+    """同一天两次记录合并：时长相加，备注拼接。"""
+    if not old:
+        return new
+    if not new.get("studied"):
+        # 今天已经记了"没学"或想改成没学：以"学过的"优先
+        if old.get("studied"):
+            return old
+        return new
+    merged = {
+        "study_date": old.get("study_date") or new.get("study_date"),
+        "studied": True,
+        "minutes": None,
+        "note": "",
+        "grammar": "",
+        "vocab": "",
+    }
+    vals = [old.get("minutes"), new.get("minutes")]
+    real = [v for v in vals if v is not None]
+    merged["minutes"] = sum(real) if real else None
+    for field in ("note", "grammar", "vocab"):
+        merged[field] = _append_text(old.get(field, ""), new.get(field, ""))
+    return merged
+
+
 def write_log(d: dt.date, studied: bool, minutes: int | None,
-              note: str = "", grammar: str = "", vocab: str = "") -> Path:
+              note: str = "", grammar: str = "", vocab: str = "",
+              mode: str = "merge") -> tuple[Path, dict]:
+    """写一条记录。
+
+    mode="merge"  同一天已有记录时累加时长、拼接备注（默认）
+    mode="replace" 覆盖当天记录
+    返回 (文件路径, 写入后的记录)。
+    """
     LOG_DIR.mkdir(parents=True, exist_ok=True)
+    path = log_path(d)
 
-    def q(s: str) -> str:
-        """需要加引号的值加双引号，避免冒号/井号搞乱解析。"""
-        if not s:
-            return ""
-        if re.search(r"[:#\"']|^\s|\s$", s):
-            return '"' + s.replace('"', '\\"') + '"'
-        return s
+    new_entry = {
+        "study_date": d.isoformat(),
+        "studied": bool(studied),
+        "minutes": minutes,
+        "note": note or "",
+        "grammar": grammar or "",
+        "vocab": vocab or "",
+    }
 
-    mins = "" if minutes is None else str(minutes)
+    final = new_entry
+    if mode == "merge" and path.exists():
+        try:
+            old = parse_log(path)
+            old = dict(old, study_date=old["date"])
+            final = merge_entries(old, new_entry)
+        except Exception:
+            final = new_entry
+
+    mins = "" if final["minutes"] is None else str(final["minutes"])
     content = (
         "---\n"
         f"date: {d.isoformat()}\n"
-        f"studied: {'true' if studied else 'false'}\n"
+        f"studied: {'true' if final['studied'] else 'false'}\n"
         f"minutes: {mins}\n"
-        f"note: {q(note)}\n"
-        f"grammar: {q(grammar)}\n"
-        f"vocab: {q(vocab)}\n"
+        f"note: {_quote(final['note'])}\n"
+        f"grammar: {_quote(final['grammar'])}\n"
+        f"vocab: {_quote(final['vocab'])}\n"
         "---\n"
     )
-    path = log_path(d)
     path.write_text(content, encoding="utf-8", newline="\n")
-    return path
+    return path, final
 
 
 def summarize(entries: list[dict]) -> dict:
@@ -199,11 +269,13 @@ def status() -> None:
 
 
 def interactive(d: dt.date) -> int:
+    existing = None
     if log_path(d).exists():
-        ans = input(f"{d} 已有记录，要覆盖吗？[y/N] ").strip().lower()
-        if ans not in YES_WORDS:
-            print("已取消。")
-            return 0
+        existing = parse_log(log_path(d))
+        mins = f"{existing['minutes']} 分钟" if existing["minutes"] is not None else "未计时"
+        note = f"，备注「{existing['note']}」" if existing["note"] else ""
+        print(f"{d} 已有记录：{'学了' if existing['studied'] else '没学'} {mins}{note}")
+        print("新内容会合并追加到今天的记录（时长相加，备注拼接）。")
 
     learned = None
     while learned is None:
@@ -218,18 +290,22 @@ def interactive(d: dt.date) -> int:
     minutes = None
     note = grammar = vocab = ""
     if learned:
-        raw = input("今天学了多久（分钟，可留空表示不知道）: ").strip()
+        raw = input("这次学了多久（分钟，可留空表示不知道）: ").strip()
         if raw:
             try:
                 minutes = int(raw)
             except ValueError:
                 print("不是数字，按“不知道”处理。")
-        note = input("一句话备注（可留空）: ").strip()
-        grammar = input("今天重点语法点（可留空）: ").strip()
-        vocab = input("今天复习/新学词汇（可留空，例如：30）: ").strip()
+        note = input("这次学了什么（可留空）: ").strip()
+        grammar = input("重点语法点（可留空）: ").strip()
+        vocab = input("词汇量或词汇备注（可留空，例如：30）: ").strip()
 
-    path = write_log(d, learned, minutes, note, grammar, vocab)
+    path, final = write_log(d, learned, minutes, note, grammar, vocab, mode="merge")
     print(f"\n已写入 {path.relative_to(ROOT).as_posix()}")
+    if existing is not None:
+        print(f"今日累计：{final['minutes'] if final['minutes'] is not None else '未计时'}"
+              f"{' 分钟' if final['minutes'] is not None else ''}　"
+              f"备注：{final['note'] or '—'}")
     print("下一步: python scripts/build_readme.py  生成主页 README")
     return 0
 
@@ -245,6 +321,8 @@ def main() -> int:
     ap.add_argument("--vocab", default="", help="词汇量或词汇备注")
     ap.add_argument("--undo", action="store_true", help="删除最近一次记录")
     ap.add_argument("--status", action="store_true", help="查看统计")
+    ap.add_argument("--replace", action="store_true",
+                    help="覆盖当天记录而不是合并（默认合并累加）")
     args = ap.parse_args()
 
     if args.status:
@@ -262,17 +340,25 @@ def main() -> int:
         return 0
 
     d = parse_date(args.date)
+    mode = "replace" if args.replace else "merge"
 
     if args.not_studied:
-        write_log(d, False, None)
+        if mode == "merge" and log_path(d).exists():
+            old = parse_log(log_path(d))
+            if old["studied"]:
+                print(f"{d} 已记录为「学了」，不会改成没学。要强制改请加 --replace。")
+                return 0
+        path, final = write_log(d, False, None, mode=mode)
         print(f"已记录 {d}: 没学 ❌")
         return 0
 
     if args.studied or args.minutes is not None or args.note or args.grammar or args.vocab:
-        studied = True
-        write_log(d, studied, args.minutes, args.note, args.grammar, args.vocab)
-        mins = f" {args.minutes} 分钟" if args.minutes is not None else ""
-        print(f"已记录 {d}: 学习{mins} ✅")
+        path, final = write_log(d, True, args.minutes, args.note, args.grammar,
+                                args.vocab, mode=mode)
+        mins = f"{final['minutes']} 分钟" if final["minutes"] is not None else "未计时"
+        print(f"已记录 {d}: 学习 ✅　今日累计 {mins}")
+        if final["note"]:
+            print(f"备注：{final['note']}")
         return 0
 
     return interactive(d)
