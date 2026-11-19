@@ -21,6 +21,11 @@ gh auth setup-git
 
 :no_gh
 echo.
+echo === syncing with remote ===
+rem GitHub Actions 会自动提交 README，先拉取避免 push 被拒
+git pull --rebase --autostash origin main || goto pull_failed
+
+echo.
 echo === building README ===
 python scripts\build_readme.py || goto err
 
@@ -38,6 +43,14 @@ echo Pushed. Refresh the GitHub repo page in a few seconds.
 pause
 exit /b 0
 
+:pull_failed
+echo.
+echo [ERROR] git pull failed. README may have conflicts.
+echo   Fix it manually, then run publish.cmd again.
+echo   To abort the pull:  git rebase --abort
+pause
+exit /b 1
+
 :auth_failed
 echo.
 echo [ERROR] GitHub login failed or was cancelled.
@@ -50,7 +63,7 @@ echo.
 echo [ERROR] push failed. Common causes:
 echo   - not logged in: run  gh auth login   (or use a Personal Access Token)
 echo   - repo does not exist yet on github.com
-echo   - remote has commits: run  git pull --rebase origin main  then retry
+echo   - remote changed during push: run publish.cmd again
 pause
 exit /b 1
 
