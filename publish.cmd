@@ -22,12 +22,15 @@ gh auth setup-git
 :no_gh
 echo.
 echo === syncing with remote ===
-rem GitHub Actions 会自动提交 README，先拉取避免 push 被拒
-git pull --rebase --autostash origin main || goto pull_failed
+rem GitHub Actions 会自动提交 README，先拉取避免 push 被拒。
+rem 注意：git 把正常信息写到 stderr，不能用 || 判断，只能看 errorlevel。
+git pull --rebase --autostash origin main
+if errorlevel 1 goto pull_failed
 
 echo.
 echo === building README ===
-python scripts\build_readme.py || goto err
+python scripts\build_readme.py
+if errorlevel 1 goto err
 
 echo.
 echo === commit ===
