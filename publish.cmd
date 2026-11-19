@@ -22,8 +22,8 @@ gh auth setup-git
 :no_gh
 echo.
 echo === syncing with remote ===
-rem GitHub Actions 会自动提交 README，先拉取避免 push 被拒。
-rem 注意：git 把正常信息写到 stderr，不能用 || 判断，只能看 errorlevel。
+rem Pull first: GitHub Actions may have committed README already.
+rem Use errorlevel, not || , because git writes normal output to stderr.
 git pull --rebase --autostash origin main
 if errorlevel 1 goto pull_failed
 
@@ -44,8 +44,8 @@ set "GIT_TERMINAL_PROMPT=0"
 git push --set-upstream origin main
 if not errorlevel 1 goto pushed
 
-rem push 失败时，从 Windows 凭据管理器取 token 再推一次。
-rem GCM 的输入必须从文件重定向，用管道在批处理里不可靠。
+rem Push failed: retry with token from Windows credential store.
+rem GCM input must come from a file; a pipe breaks inside batch.
 echo.
 echo [WARN] push failed. Trying windows credential store...
 set "GCM=D:\Program Files\Git\mingw64\bin\git-credential-manager.exe"
